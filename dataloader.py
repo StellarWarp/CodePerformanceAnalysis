@@ -1,4 +1,3 @@
-import time
 from pathlib import Path
 
 import pandas as pd
@@ -9,7 +8,11 @@ from pojo import CallEventNode
 from utrace_data_export import utrace2CSV
 
 
-def build_call_tree(events_df:DataFrame)->CallEventNode:
+def build_call_tree(events_df:DataFrame,timer_df:DataFrame)->CallEventNode:
+
+    events_df = events_df.merge(
+        timer_df[['TimerId','source_file','source_line']],how='left',on='TimerId'
+    )
     min_start_time = events_df['StartTime'].min()
     max_end_time = events_df['EndTime'].max()
     total_duration = max_end_time - min_start_time
@@ -33,7 +36,7 @@ def build_call_tree(events_df:DataFrame)->CallEventNode:
     # 使用itertuples以获得更好的性能
     for row in tqdm(events_df.itertuples(), total=len(events_df), desc="Building Call Tree"):
         # 使用 _asdict() 将命名元组高效地转换为字典
-        row_dict = row._asdict()
+        row_dict = row._asdict() # TODO 对于source_file字段为nan的处理
 
         # 修正回溯逻辑
         # 当新节点深度小于等于栈顶节点时，需要弹出栈顶元素以找到正确的父节点
@@ -86,8 +89,8 @@ def load_events(file_path,thread_name='GameThread')->DataFrame:
 
 def load_timer(file_path,timer_type='CPU')->DataFrame:
     df = pd.read_csv(file_path)
-    df.rename(columns={'Name':'TimerName'}, inplace=True)
-    return df[df['Type'] == timer_type]
+    df.rename(columns={'Name':'TimerName','Type':'TimerType','Id':'TimerId','File':'source_file','Line':'source_line'}, inplace=True)
+    return df[df['TimerType'] == timer_type]
 
 def loadTimerStats(file_path)->DataFrame:
     df = pd.read_csv(file_path)
@@ -118,7 +121,7 @@ def load_insights_data(data_dir:str,timer_type='CPU',thread_name='GameThread'):
     timer_stats = timer_stats[timer_stats['TimerName'].apply(lambda x:x in timer_name_set)]
 
     events_df = events_df[events_df['TimerName'].apply(lambda x: x in timer_name_set)]
-    call_tree = build_call_tree(events_df)
+    call_tree = build_call_tree(events_df,timer_df)
 
     return timer_df,timer_stats,call_tree
 

@@ -1,3 +1,4 @@
+import os.path
 import statistics
 from collections import defaultdict
 from typing import Dict, Optional
@@ -9,19 +10,46 @@ from pydantic import ValidationError
 from typing_extensions import Annotated
 
 
+TIMER_DESCRIPTION = """由Unreal Insights捕获的计时事件（Timer）的名称。这是在Timing Insights视图中看到的性能测量范围的核心标识符。该名称通常在引擎的C++源代码中通过性能分析宏（如 SCOPE_CYCLE_COUNTER, SCOPED_NAMED_EVENT）定义，其格式多样，主要有以下几种情况：
+
+1.  **标准函数签名**: 最常见的格式，直接对应一个C++类和函数名。格式为 `ClassName::FunctionName`。示例: `FScene::Render`。
+
+2.  **带源码位置的名称**: 在某些情况下，为了便于调试，名称会附加其在源代码中的精确位置。格式为 `Name [FileName.cpp(LineNumber)]`。示例: `SSceneOutlinerTreeView [SSceneOutliner.cpp(265)]`。
+
+3.  **描述性/分类名称**: 用于标记一个更广泛的系统或任务，而不仅仅是一个函数。这种名称通常提供了额外的上下文信息。格式可能为 `Category::SubCategory (Description)`。示例: `Slate::Tick (Time and Widgets)`。
+
+该字段是将性能数据与特定代码块或引擎模块关联起来的关键。在进行自动化分析时，需要考虑其格式的多样性来进行解析。"""
+
 class CallStackFrame(BaseModel):
     """
     定义了调用栈中单个帧的数据结构。
     """
     event_id: Annotated[
         int,
-        Field(description="A unique identifier for the event within the entire trace.")
+        Field(description="整个跟踪中事件的唯一标识符。")
     ] = -1
 
     TimerName: Annotated[
         Optional[str],
-        Field(description='The name of the timer. For nodes filtered by this function, it is typically "Frame".')
+        Field(description=TIMER_DESCRIPTION)
     ] = None
+
+
+class TimerSource(BaseModel):
+    source_file: Annotated[
+        str,
+        Field(
+            description="定义此计时器(Timer)的源代码文件的绝对或相对路径。"
+        )
+    ]
+
+    source_line: Annotated[
+        int,
+        Field(
+            description="在源代码文件中定义此计时器(Timer)的具体行号。"
+        )
+    ]
+
 
 class CallEventMeta(BaseModel):
     """
@@ -30,54 +58,64 @@ class CallEventMeta(BaseModel):
     """
     ThreadId: Annotated[
         int,
-        Field(description="The ID of the thread that executed this event.")
+        Field(description="执行此事件的线程ID。")
     ] = -1
 
     ThreadName: Annotated[
         Optional[str],
-        Field(description="The name of the thread that executed this event.")
+        Field(description="执行此事件的线程的名称。")
     ] = None
 
     TimerId: Annotated[
         int,
-        Field(description="The ID of the timer.")
+        Field(description="定时器的ID。")
     ] = -1
 
     TimerName: Annotated[
         Optional[str],
-        Field(description='The name of the timer. For nodes filtered by this function, it is typically "Frame".')
+        Field(description=TIMER_DESCRIPTION)
     ] = None
 
     StartTime: Annotated[
         float,
-        Field(description="Timestamp when the event started, in seconds.")
+        Field(description="事件开始的时间戳，单位为秒。")
     ] = -1.0
 
     EndTime: Annotated[
         float,
-        Field(description="Timestamp when the event ended, in seconds.")
+        Field(description="事件结束的时间戳，单位为秒。")
     ] = -1.0
 
     Duration: Annotated[
         float,
-        Field(description="The duration of the event (EndTime - StartTime), in seconds.")
+        Field(description="事件的持续时间（EndTime - StartTime），单位为秒。")
     ] = 0.0
 
     CallDepth: Annotated[
         int,
-        Field(description="The depth of the event in the call stack.")
+        Field(description="事件在调用栈中的深度。")
     ] = 0
 
     event_id: Annotated[
         int,
-        Field(description="A unique identifier for the event within the entire trace.")
+        Field(description="整个跟踪中事件的唯一标识符。")
     ] = -1
 
     call_stack: Annotated[
         List[CallStackFrame],
         Field(
-            description="A list of call stack frames showing the complete call stack for that node (excluding the event itself) in order from top to bottom (caller -> callee), with each element containing the event id and timer name of a stack")
+            description="调用堆栈帧的列表，从上到下（caller -> callee）显示该节点的完整调用堆栈（不包括事件本身），每个元素包含一个堆栈的事件id和定时器名称")
     ]
+
+    timer_source_info: Annotated[
+        TimerSource,
+        Field(
+            description="表示一个性能计时器 (Timer) 在源代码中的定义位置, 包含源文件的绝对路径或相对路径以及行号。如果为空(null)，则代表无法获取该计时器在源码中的位置。"
+        )
+    ] = None
+
+
+
 
 
 class CallEventNode(anytree.Node):
@@ -94,12 +132,22 @@ class CallEventNode(anytree.Node):
         2. 使用 name 和 parent 初始化 anytree.Node。
         """
         # 步骤 B: 调用父类 (anytree.Node) 的初始化方法来构建树。
+
+
+
         super().__init__(name, parent)
         full_path = list(self.path)[1:-1] # TODO 去除虚构的根节点和该节点自身
         call_stack = [CallStackFrame(event_id=node.event_id,TimerName=node.TimerName) for node in full_path]
-        # 步骤 A: 将所有额外的关键字参数用于创建 self.meta 实例。
-        # Pydantic 会自动验证传入的 kwargs，如果有多余或类型错误的参数，会在这里报错。
-        self.meta = CallEventMeta(**kwargs,call_stack=call_stack)
+        source_file,source_line = kwargs.get('source_file',None),kwargs.get('source_line',-1)
+
+        timer_source_info = TimerSource(
+            source_file=source_file,
+            source_line=source_line,
+        ) if isinstance(source_file,str) and not source_file.strip() and source_line!=-1 else None
+
+        kwargs.pop('source_file')
+        kwargs.pop('source_line')
+        self.meta = CallEventMeta(**kwargs,call_stack=call_stack,timer_source_info=timer_source_info)
 
 
 
@@ -127,27 +175,27 @@ class CallEventNode(anytree.Node):
 class ExceptionFrame(BaseModel):
     event_id: Annotated[
         int,
-        Field(description="A unique identifier for the event within the entire trace.")
+        Field(description="整个跟踪中事件的唯一标识符。")
     ]
 
     ThreadName: Annotated[
         Optional[str],
-        Field(description="The name of the thread that executed this event.")
+        Field(description="执行此事件的线程的名称。")
     ]
 
     Duration: Annotated[
         float,
-        Field(description="The duration of the event (EndTime - StartTime), in seconds.")
+        Field(description="事件的持续时间（EndTime - StartTime），单位为秒。")
     ]
 
     StartTime: Annotated[
         float,
-        Field(description="Timestamp when the event started, in seconds.")
+        Field(description="事件开始的时间戳，单位为秒。")
     ]
 
     EndTime: Annotated[
         float,
-        Field(description="Timestamp when the event ended, in seconds.")
+        Field(description="事件结束的时间戳，单位为秒。")
     ]
 
 
@@ -164,7 +212,7 @@ class TimerMeta(BaseModel):
     TimerName: Annotated[
         str,
         Field(
-              description="The name of the timer, typically a function or a scoped event. (计时器的名称，通常是函数名或作用域事件。)")
+              description=TIMER_DESCRIPTION)
     ]
 
     count: Annotated[
