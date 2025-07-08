@@ -131,23 +131,25 @@ class CallEventNode(anytree.Node):
         1. 将所有元数据相关的关键字参数 (kwargs) 传递给 CallEventMeta 进行验证和实例化。
         2. 使用 name 和 parent 初始化 anytree.Node。
         """
-        # 步骤 B: 调用父类 (anytree.Node) 的初始化方法来构建树。
-
-
-
         super().__init__(name, parent)
-        full_path = list(self.path)[1:-1] # TODO 去除虚构的根节点和该节点自身
-        call_stack = [CallStackFrame(event_id=node.event_id,TimerName=node.TimerName) for node in full_path]
-        source_file,source_line = kwargs.get('source_file',None),kwargs.get('source_line',-1)
-
-        timer_source_info = TimerSource(
-            source_file=source_file,
-            source_line=source_line,
-        ) if isinstance(source_file,str) and not source_file.strip() and source_line!=-1 else None
-
-        kwargs.pop('source_file')
-        kwargs.pop('source_line')
-        self.meta = CallEventMeta(**kwargs,call_stack=call_stack,timer_source_info=timer_source_info)
+        source_file = kwargs.pop('source_file', None)
+        source_line = kwargs.pop('source_line', -1)
+        timer_source_info = None
+        if isinstance(source_file, str) and source_file.strip() and source_line != -1:
+            timer_source_info = TimerSource(
+                source_file=source_file,
+                source_line=source_line,
+            )
+        path_for_stack = list(self.path)[1:-1]
+        call_stack = [
+            CallStackFrame(event_id=node.meta.event_id, TimerName=node.meta.TimerName)
+            for node in path_for_stack
+        ]
+        self.meta = CallEventMeta(
+            **kwargs,
+            call_stack=call_stack,
+            timer_source_info=timer_source_info
+        )
 
 
 
