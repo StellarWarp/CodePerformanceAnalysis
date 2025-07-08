@@ -30,7 +30,7 @@ class CallStackFrame(BaseModel):
     ] = -1
 
     TimerName: Annotated[
-        Optional[str],
+        str,
         Field(description=TIMER_DESCRIPTION)
     ] = None
 
@@ -62,7 +62,7 @@ class CallEventMeta(BaseModel):
     ] = -1
 
     ThreadName: Annotated[
-        Optional[str],
+        str,
         Field(description="执行此事件的线程的名称。")
     ] = None
 
@@ -72,7 +72,7 @@ class CallEventMeta(BaseModel):
     ] = -1
 
     TimerName: Annotated[
-        Optional[str],
+        str,
         Field(description=TIMER_DESCRIPTION)
     ] = None
 
@@ -108,7 +108,7 @@ class CallEventMeta(BaseModel):
     ]
 
     timer_source_info: Annotated[
-        TimerSource,
+        Optional[TimerSource],
         Field(
             description="表示一个性能计时器 (Timer) 在源代码中的定义位置, 包含源文件的绝对路径或相对路径以及行号。如果为空(null)，则代表无法获取该计时器在源码中的位置。"
         )
@@ -181,7 +181,7 @@ class ExceptionFrame(BaseModel):
     ]
 
     ThreadName: Annotated[
-        Optional[str],
+        str,
         Field(description="执行此事件的线程的名称。")
     ]
 
