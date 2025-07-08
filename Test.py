@@ -5,7 +5,7 @@ from fastmcp import Client
 
 client = Client({
         "Unreal insight Call Tree": {
-            'url': "http://localhost:8000/sse/",
+            'url': "http://localhost:8001/sse/",
             "transport": "sse"
         }
     })
