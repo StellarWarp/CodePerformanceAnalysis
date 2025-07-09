@@ -75,7 +75,7 @@ def load_events(file_path,thread_name='GameThread')->DataFrame:
 
     # 将所有处理过的、较小的结果合并成一个最终的DataFrame
     print("合并所有处理结果...")
-    final_df = pd.concat(results_list,ignore_index=True)
+    final_df = pd.concat(results_list)
     # 按 StartTime 排序并重置索引
     final_df = final_df.sort_values('StartTime')
 
