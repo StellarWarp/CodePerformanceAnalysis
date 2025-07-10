@@ -584,3 +584,149 @@ class CostDistribution(BaseModel):
                   f"平均: {timer.exclusive_avg:10.6f}s")
 
 
+
+
+
+
+
+
+
+
+
+
+class WorkFlowNode(BaseModel):
+    task_description: Annotated[str, "工作流节点任务描述"]
+    task_name: Annotated[str, "工作流节点名称,每个工作流节点的唯一标识符"]
+    dependencies: Annotated[List[str],'前置依赖的工作流节点名称']
+    input_specification: Annotated[str, '输入']
+    output_specification: Annotated[str, '输出']
+    required_tools: Annotated[List[str],'所需工具列表名称']
+
+
+
+class TaskPrompt:
+    """
+    用于动态构建和组织“任务执行Agent”的System Prompt。
+    它将一个复杂的指令分解为多个结构化部分，在任务开始前渲染成最终的System Prompt，
+    为执行Agent提供其角色、目标、工具、上下文等所有必要信息。
+    """
+    # --- 用于渲染 System Prompt 的核心组件 ---
+    project_info_prompt: Annotated[Optional[str], Field(
+        description='''项目元信息：定义整个工作流的宏观背景、核心业务或最终目标，为执行Agent提供顶层上下文。'''
+    )] = None
+
+    experience_prompt: Annotated[Optional[str], Field(
+        description='''相关经验或知识库：注入与当前任务相关的背景知识、最佳实践或历史解决方案，作为Agent决策的参考。'''
+    )] = None
+
+    important_prompt: Annotated[Optional[str], Field(
+        description='''重要指令或约束：需要特别强调的关键指令、规则或必须遵守的约束条件。'''
+    )] = None
+
+    helper_assistant_prompt: Annotated[Optional[str], Field(
+        description='''协作单元介绍：说明与当前Agent协同工作的其他AI Agent或外部系统（如有），并描述它们的作用。'''
+    )] = None
+
+    # node_struct_prompt: Annotated[Optional[str], Field(
+    #     description='''工作流节点结构定义：描述工作流中一个标准节点的通用数据结构，帮助Agent理解其自身及相邻节点的构成。'''
+    # )] = None
+    #
+    # role_prompt: Annotated[Optional[str], Field(
+    #     description='''角色定义提示：明确告知任务执行Agent它当前应当扮演的具体角色（例如：“你是一个专注代码分析的AI助手”）。'''
+    # )] = None
+    #
+    # specific_task_prompt: Annotated[Optional[str], Field(
+    #     description='''本节点核心任务描述：清晰、详尽地描述当前节点需要完成的核心目标（Node Objective），这是Agent的首要任务。'''
+    # )] = None
+    #
+    # tool_description_prompt: Annotated[Optional[str], Field(
+    #     description='''可用工具集描述：提供给当前任务执行Agent的所有可用工具的列表及其详细描述，严格限定其行动范围。'''
+    # )] = None
+    #
+    #
+    #
+    # response_prompt: Annotated[Optional[str], Field(
+    #     description='''输出格式与契约：严格限定Agent完成任务后需要输出的内容格式（如：必须符合特定的JSON Schema），定义其“数据契约”。'''
+    # )] = None
+    #
+    # extra_prompt: Annotated[Optional[str], Field(
+    #     description='''其他补充信息：用于提供未在其他字段中涵盖的任何额外上下文、边缘案例说明或补充指令。'''
+    # )] = None
+    #
+    # partial_nodes_prompt: Annotated[Optional[str], Field(
+    #     description='''相邻节点上下文：提供当前节点的直接上游（父节点）和下游（子节点）的摘要信息，帮助Agent理解其在工作流中的位置和数据流关系。'''
+    # )] = None
+    #
+    # # --- 用于生成 User Message 的核心组件 ---
+    # task_message_prompt: Annotated[Optional[str], Field(
+    #     description='''任务启动指令：作为User Message发送给Agent的启动信号，通常包含对任务的最终、最直接的指令，例如“开始执行任务：Identify_Macro_Bottleneck”。'''
+    # )] = None
+
+
+class SubTaskItem(BaseModel):
+    """
+    代表为完成一个工作流节点而拆分出的一个更细粒度的、可执行的子任务。
+    这是任务执行Agent内部进行任务分解后的基本工作单元。
+    """
+    task: Annotated[str, Field(
+        description='''子任务指令：一个清晰、原子化的指令，明确定义了该子任务需要达成的具体目标和预期的产出形式。'''
+    )]
+
+    context: Annotated[str, Field(
+        description='''子任务上下文：执行此子任务所需的所有背景信息，包括但不限于所需的数据片段、来自前序子任务的输出、执行此任务的原因等。'''
+    )]
+
+
+class Task(BaseModel):
+    """
+    一个工作流节点的完整“任务包（Task Package）”。
+    它封装了将一个规划好的工作流节点交付给“任务执行Agent”所需的所有信息，
+    是连接“规划层”和“执行层”的核心数据对象。
+    """
+    task_prompt: Annotated[TaskPrompt, Field(
+        description='''任务执行Agent的Prompt配置：包含了用于生成该Agent System Prompt的所有结构化信息。'''
+    )]
+
+    # 注意：这里的sub_task_list可以由规划Agent预先进行粗粒度拆分，也可以为空，由执行Agent在运行时自行拆分。
+    sub_task_list: Annotated[List[SubTaskItem], Field(
+        description='''预设的顶级子任务列表：为完成本节点的核心目标而预先规划的一系列高阶步骤。执行Agent可以遵循此列表，也可以在此基础上进一步分解。'''
+    )]
+
+    mcp_tools: Annotated[Dict[str,List[str]], Field(
+        description='''执行该工作流节点所需要的MCP工具列表，key代表mcp_server_id,value为该MCP Server下所需要的工具列表名称'''
+    )]
+
+
+
+class WorkFlowContextManager:
+
+    context: Dict[str, str]
+
+
+class TaskGenerate(Task):
+    # 该任务将创建一个任务生成Agent，该Agent的功能是每个工作流节点创建一个Task类，该Agent首先接受任务规划Agent输出的工作流，将每个工作流节点转换成Task类是它的顶级子任务（一个工作流节点一个顶级子任务），
+    # 每个子任务都需要检索相关优化知识（到时候执行该工作流节点的Agent需要的优化知识）并为到时候需要执行该工作流节点的Agent指定初始的顶级子任务。
+    # 任务生成Agent的每个顶级子任务的输出是一个Task类，最终该Agent应当返回一个Task列表
+
+    @staticmethod
+    def generate_task1(workFlowNode:WorkFlowNode)->Task:
+        # 搜索相关经验文档并返回字符串
+        # 制定顶级子任务
+        pass
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
