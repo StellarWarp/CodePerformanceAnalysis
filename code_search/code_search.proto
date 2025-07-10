@@ -1,0 +1,53 @@
+﻿syntax = "proto3";
+
+option csharp_namespace = "AgentCodeSearchExtension";
+
+package agentcodesearch;
+
+service SymbolSearchService {
+  rpc FindSymbols (SymbolRequest) returns (SymbolResponse);
+  rpc FindText (TextSearchRequest) returns (TextSearchResponse);
+}
+
+enum SearchMode {
+  SYMBOL_ENTIREWORD = 0;
+  SYMBOL_SUBSTRING = 1;
+  SYMBOL_PRESTRING = 2;
+}
+
+message SymbolRequest {
+  string symbol_name = 1;
+  SearchMode search_mode = 2;
+  int32 context_before = 3;
+  int32 context_after = 4;
+}
+
+message SymbolInfo {
+  string name = 1;
+  string type = 2; // 符号类型，如 Class, Function, Variable
+  string file_path = 3;
+  int32 line_number = 4;
+  string context = 5;
+}
+
+message SymbolResponse {
+  repeated SymbolInfo symbols = 1;
+}
+
+message TextSearchRequest{
+	string text = 1;
+	int32 context_before = 2;
+	int32 context_after = 3;
+	string search_path = 4;
+	string file_extension = 5;
+}
+
+message TextSearchResult {
+	string file_path = 1;
+	int32 line_number = 2;
+	string context = 3;
+}
+
+message TextSearchResponse{
+	repeated TextSearchResult results = 1;
+}
