@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import os
 import sys
 import traceback
 from pathlib import Path
@@ -14,42 +15,28 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import StateGraph, END, add_messages
 from langgraph.types import Command, interrupt, Interrupt
 
-json_converter_prompt = """# 角色与目标 (ROLE & GOAL)
-你是一位专业的、高精度的格式转换专家。你唯一的任务，就是根据下面提供的规范，将自然语言描述的计划转换为严格的JSON格式。你必须分析给出的对话历史，在其中找到用户最终批准的计划版本，并执行转换。
+json_converter_prompt = """# 角色 (Role)
+你是一个高度精确的 工作流序列化引擎 (Workflow Serialization Engine)。你的任务不是设计或修改工作流，而是将一个以自然语言描述的、已经确定的工作流方案，转换成一个结构严谨、可供机器读取的JSON格式。你必须注重细节，确保100%的准确性。
 
-# 上下文 (CONTEXT)
-你收到的对话历史包含了一段关于创建性能分析工作流的完整讨论。当前的这条指令是整个对话历史的最后一条消息。最终确认的计划，就是在这条指令之前、最后一次出现的、以自然语言格式呈现的、包含多个步骤的详细工作流。
+# 核心目标 (Primary Objective)
+你的唯一功能是：读取所提供的、用户与任务规划Agent之间的完整对话历史，从中识别出最终被双方确认采纳的工作流方案，然后将该方案的每一个步骤都精确地转换为JSON对象格式，最终输出一个完整的JSON。
 
-# 任务 (TASK)
-1.  **定位 (IDENTIFY)**: 从对话历史的末尾向前扫描，定位最终的、完整的、包含多个步骤的计划。该计划的格式为一系列步骤，每个步骤都以“步骤 X: [任务标识符]”开头。
-2.  **转换 (CONVERT)**: 根据下述严格的规范，将定位到的计划转换为一个JSON对象。
-3.  **输出 (OUTPUT)**: 你的输出必须且只能是纯粹、有效的JSON对象，绝不能包含任何额外的文字、解释或像 ```json ... ``` 这样的Markdown标记。
+你必须忽略所有在讨论过程中产生的草稿、被否决的方案或中间版本。
 
-# JSON规范与字段映射规则 (JSON SCHEMA & FIELD MAPPING)
-输出必须是一个单一的JSON对象，其根键为“plan”，值是一个由任务对象组成的数组。请严格遵守以下的字段名称和映射规则：
+# 输入 (Input)
+对话历史 ({conversation_history}): 一段完整的对话文本，记录了任务规划Agent如何设计工作流，以及用户如何反馈并最终确认方案的全过程。
 
-## 根结构
-{
-  "plan": [ /* 任务对象数组 */ ]
-}
+# 核心执行流程 (Core Execution Process)
+扫描对话: 通读整个对话历史，理解工作流方案是如何从初稿演变为最终版本的。
 
-## 任务对象结构
-{
-  "task_name": "string",
-  "description": "string",
-  "dependencies": ["string"],
-  "suggested_tools": ["string"],
-  "key_parameters": { "key": "value" }
-}
+定位最终方案: 准确地找出最后被用户明确或默许采纳的那个完整工作流版本。通常，这会是规划Agent发出的最后一条包含完整步骤列表的消息，并且紧随其后有用户的正面确认（如：“好的，就这么办”、“可以，启动吧”、“没问题”等）。
 
-## 字段映射规则
-- **"task_name"**: 从 `步骤 X: [任务标识符]` 这一行中，提取 `[任务标识符]` 字符串。
-- **"description"**: 使用 `任务描述:` 字段的完整文本内容。
-- **"dependencies"**: 从 `前置依赖:` 字段中提取标识符。如果内容为“无”，则必须使用一个空数组 `[]`。如果列出了多个依赖，则创建一个包含所有依赖的字符串数组。
-- **"suggested_tools"**: 从 `建议工具:` 字段中提取所有工具名称，并将它们放入一个字符串数组。
-- **"key_parameters"**: 将 `关键参数:` 下方列出的所有键值对，转换为一个JSON对象。请确保所有值的类型正确（如数字、布尔值或字符串）。
+逐项提取: 锁定最终方案后，按顺序遍历其中的每一个步骤。
 
-现在开始转换。"""
+精确映射: 对于每一个步骤，从其自然语言描述中提取六个核心部分（步骤标题、任务描述、前置依赖、输入规范、输出规范、所需工具），并将这些信息严格映射到下方 # 输出JSON结构定义 中指定的字段。
+
+生成并验证: 将所有步骤的JSON对象组合成一个列表，并将其放入最终的根JSON对象中。确保最终输出的是一个单一、完整且语法正确的JSON文本。不要在JSON代码块前后添加任何额外的解释性文字、注释或Markdown标记。
+"""
 
 
 # --- Configuration ---
@@ -57,12 +44,16 @@ json_converter_prompt = """# 角色与目标 (ROLE & GOAL)
 class AgentConfig:
     """代理配置类"""
     model_name: str = "deepseek-chat"
-    api_key: str = ""  # 从环境变量或配置文件读取
+    api_key: str = os.environ['DEEPSEEK_API_KEY']  # 从环境变量或配置文件读取
     base_url: str = "https://api.deepseek.com/v1"
     mcp_servers: Dict[str, Dict[str, str]] = field(default_factory=lambda: {
         "Unreal insight Call Tree": {
-            'url': "http://localhost:8000/sse/",
+            'url': "http://localhost:8001/sse/",
             "transport": "sse"
+        },
+        "CodeGraph": {
+            'url': "http://localhost:8000/mcp/",
+            "transport": "streamable_http"
         }
     })
     thread_id: str = "human-in-the-loop-thread"
