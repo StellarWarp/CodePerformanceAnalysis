@@ -1,8 +1,13 @@
+import json
+from operator import index
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 from pandas import DataFrame
 from tqdm import tqdm
+
+from typing import Dict, List, Tuple
 
 from pojo import CallEventNode
 from utrace_data_export import utrace2CSV
@@ -124,6 +129,104 @@ def load_insights_data(data_dir:str,timer_type='CPU',thread_name='GameThread'):
     call_tree = build_call_tree(events_df,timer_df)
 
     return timer_df,timer_stats,call_tree
+
+def load_raw_top_stat(raw_stat_file:str)->Tuple[np.ndarray,np.ndarray]:
+    """
+    :param raw_stat_file: 原始top stat数据
+    :return: 事件名称列表，
+    """
+    with open(raw_stat_file,'r',encoding='utf-8') as f:
+        lines = f.readlines()
+        event_name_list = np.array(lines[0].split(',')[1:]) # 删除第一个
+        csv_profiler_data = []
+        for line in lines[1:]:
+            frame_array = np.array(line.strip().split(',')[1:]) # 删除第一个
+            if frame_array[0]=='EVENTS':
+                break
+            frame_array = np.where(frame_array.astype(str) == '', '0.0', frame_array).astype(float)
+            csv_profiler_data.append(frame_array)
+
+        profiler_matrix = np.vstack(csv_profiler_data)  # row为一帧数据
+        assert profiler_matrix.shape[1] == len(event_name_list)
+        return event_name_list, profiler_matrix
+
+
+def extra_exception_top_stat(event_name_list:np.ndarray, profiler_matrix:np.ndarray,windows_threshold:int=100,max_frame_cost:float=30.0)->Tuple[List[np.ndarray],np.ndarray]:
+    """
+    :param event_name_list: 事件名称
+    :param profiler_matrix: 一级性能追踪数据矩阵，每行 为一帧
+    :param windows_threshold: 持续低帧的窗口阈值，默认100帧，即超过100个持续的低帧区间才会被统计，单位为帧
+    :param max_frame_cost: 低帧率阈值，默认为30fps,单位为毫秒，当帧率小于30帧时才视为低帧
+    :return: List[Profiler matrix],event_name_list
+    """
+
+    def find_exception_blocks(bool_arr, windows_threshold):
+        """
+        :param bool_arr: bool数组，是否为异常帧
+        :param windows_threshold: 最小窗口
+        :return:
+        valid_blocks = （异常窗口起始索引，异常窗口终止索引）
+        """
+        # 确保输入是NumPy数组
+        bool_arr = np.asarray(bool_arr, dtype=bool)
+
+        # 计算True区间的起始和结束索引
+        diff = np.diff(np.concatenate(([False], bool_arr, [False])))
+        starts = np.where(diff == 1)[0]
+        ends = np.where(diff == -1)[0] - 1
+
+        # 计算区间长度并筛选
+        lengths = ends - starts + 1
+        valid_blocks = [(start, end) for start, end, length in zip(starts, ends, lengths) if length >= windows_threshold]
+
+        return valid_blocks
+
+
+    # GameThread/GameEngineTick
+    game_engine_tick_index = np.where(event_name_list == 'GameThread/GameEngineTick')[0]
+    is_exception_frame = profiler_matrix[:,game_engine_tick_index] > 1000.0/max_frame_cost
+    exception_interval_index = find_exception_blocks(is_exception_frame,windows_threshold)
+    return [profiler_matrix[start:end+1,:] for start, end in exception_interval_index],event_name_list
+
+
+
+def top_stat_data2DataFrame(top_stat_profiler_matrix:np.ndarray[float],event_name_list:List[str],module_dict_file:str)->DataFrame:
+    """
+    top_stat_profiler_matrix: 矩阵，行为一帧的数据，
+    event_name_list: 事件名称
+    module_dict_file: 顶级插桩名称与模块对应字典
+    :return: DataFrame: {
+            Event:
+            min:
+            max:
+            avg:
+            pct:
+            count:
+            module:
+        }
+    """
+    with open(module_dict_file,'r',encoding='utf-8') as f:
+        module_dict = json.load(f)
+    game_engine_tick_index = np.where(event_name_list == 'GameThread/GameEngineTick')[0]
+    sum_cost = np.sum(top_stat_profiler_matrix[:,game_engine_tick_index])
+    top_stat_df = pd.DataFrame({
+        'Event':event_name_list,
+        'min':np.min(top_stat_profiler_matrix,axis=0),
+        'max':np.max(top_stat_profiler_matrix,axis=0),
+        'avg':np.average(top_stat_profiler_matrix,axis=0),
+        'pct':np.sum(top_stat_profiler_matrix,axis=0)/sum_cost,
+        'count':np.count_nonzero(top_stat_profiler_matrix,axis=0)
+    })
+
+    top_stat_df['module'] = top_stat_df['Event'].apply(lambda x:module_dict.get(x,'UNKNOWN'))
+    return top_stat_df
+
+
+
+
+
+
+
 
 
 import os
