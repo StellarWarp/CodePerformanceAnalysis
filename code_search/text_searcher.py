@@ -4,6 +4,34 @@ import concurrent.futures
 import pickle
 import threading
 import time
+from pathlib import Path
+
+
+def default_file_filter(file_paths):
+    # UE项目中常见的源代码文件扩展名
+    file_extensions = {'.cpp', '.h', '.hpp', '.c', '.cc', '.cxx'}
+
+    # 需要排除的目录
+    exclude_dirs = {
+        'Binaries', 'Build', 'DerivedDataCache', 'Intermediate',
+        'Saved', '.git', '.vs', '.vscode', 'node_modules'
+    }
+    def should_search(file_path):
+        file_path = Path(file_path)
+
+        if file_path.suffix.lower() not in file_extensions:
+            return False
+
+        # 检查是否在排除的目录中
+        for part in file_path.parts:
+            if part in exclude_dirs:
+                return False
+
+        return True
+
+    return [path for path in file_paths if should_search(path)]
+
+
 
 class RegexSearchTool:
 
@@ -15,6 +43,7 @@ class RegexSearchTool:
             self.context_chars_before = context_chars_before
             self.context_chars_after = context_chars_after
             self.context_regex_filters = context_regex_filters # [(regex, group_index), ...]
+
 
     def __init__(self):
         self.lock = threading.Lock() # For thread-safe cache updates
@@ -74,6 +103,11 @@ class RegexSearchTool:
                 all_files.append(os.path.join(dirpath, filename))
         return all_files
 
+
+
+
+
+
     def _search_file_task(self, file_paths, regex_pattern,index_group=0,context_search_options:ContextSearchOptions=None):
         """Task for a single thread: searches multiple files."""
         thread_matches = {}
@@ -123,7 +157,7 @@ class RegexSearchTool:
             print(f"Error reading file {filepath}: {e}")
         return thread_matches
 
-    def search(self, root_dir, regex_pattern,index_group=0,context_search_options:ContextSearchOptions=None):
+    def search(self, root_dir, regex_pattern,index_group=0,context_search_options:ContextSearchOptions=None,file_filter=default_file_filter):
         """
         Performs a regex search in the given directory, leveraging caching
         and multithreading based on logical CPU cores, using metadata for hash.
@@ -137,6 +171,7 @@ class RegexSearchTool:
         #     self._calculate_folder_metadata_hash_and_file_info(root_dir)
         
         all_project_files = self._get_files(root_dir)
+        all_project_files = file_filter(all_project_files)
 
 
         # --- Threaded Searching Phase ---
@@ -171,7 +206,7 @@ class RegexSearchTool:
 if __name__ == "__main__":
 
     tool = RegexSearchTool()
-    search_dir = r"D:\Source\UnrealEngine\Engine\Source\Runtime"
+    search_dir = r"C:\Users\lyq\UESource\UnrealEngine-5.4.4-release"
     regex_pattern = r"CSV_SCOPED_TIMING_STAT_EXCLUSIVE\((.*?)\)"
     context_search_options = RegexSearchTool.ContextSearchOptions(
         context_chars_before=500, 
